@@ -21,6 +21,14 @@ import { GoogleGenAI } from "@google/genai";
 
 dotenv.config();
 
+// Global process exception safety handlers for robust container lifecycles
+process.on("unhandledRejection", (reason, promise) => {
+  console.warn("Unhandled Rejection at:", promise, "reason:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception caught safely:", err);
+});
+
 // In-memory data structures for fast real-time operation in container
 interface BotTrainingQA {
   id: string;
@@ -4575,7 +4583,14 @@ OUTPUT FORMAT REQUIREMENTS:
       });
     });
 
-    if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    const distPath = path.join(process.cwd(), "dist");
+    const hasDist = fs.existsSync(path.join(distPath, "index.html"));
+    const isProduction =
+      process.env.NODE_ENV === "production" ||
+      Boolean(process.env.K_SERVICE || process.env.K_REVISION) ||
+      (hasDist && process.env.NODE_ENV !== "development");
+
+    if (!isProduction && !hasDist && !process.env.VERCEL) {
       const { createServer: createViteServer } = await import("vite");
       const vite = await createViteServer({
         server: {
@@ -4586,7 +4601,6 @@ OUTPUT FORMAT REQUIREMENTS:
       });
       app.use(vite.middlewares);
     } else if (!process.env.VERCEL) {
-      const distPath = path.join(process.cwd(), "dist");
       app.use(express.static(distPath));
       app.get("*", (_req, res) => {
         res.sendFile(path.join(distPath, "index.html"));
@@ -4596,6 +4610,15 @@ OUTPUT FORMAT REQUIREMENTS:
     server.listen(PORT, "0.0.0.0", () => {
       console.log(`Z-messenger server running on http://0.0.0.0:${PORT}`);
     });
+
+    // Handle Cloud Run graceful shutdown
+    const handleShutdown = () => {
+      server.close(() => {
+        process.exit(0);
+      });
+    };
+    process.on("SIGTERM", handleShutdown);
+    process.on("SIGINT", handleShutdown);
 
     return server;
   }

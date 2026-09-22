@@ -1,1 +1,0 @@
-console.log("file global.__dirname:", global.__dirname, "local:", __dirname);

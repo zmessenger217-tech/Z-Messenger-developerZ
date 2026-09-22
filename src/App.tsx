@@ -68,6 +68,7 @@ export default function App() {
           id: "test_m_" + Date.now(),
           conversationId: "test",
           senderId: "test_bot",
+          receiverId: currentUser?.id || "me",
           type: "text",
           content: detail?.message || "This is how on-screen notifications appear on mobile & APK screens!",
           timestamp: Date.now(),
@@ -309,6 +310,7 @@ export default function App() {
                   ? "🎉 Super Admin granted you full access to the AI Chatbot! Head to Settings -> AI Chatbot to configure it."
                   : `Your AI Chatbot access was updated by Super Admin to: ${newStatus}`,
                 timestamp: Date.now(),
+                read: true,
               },
               senderName: "Super Admin",
               senderAvatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100",

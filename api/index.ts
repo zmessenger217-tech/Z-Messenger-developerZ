@@ -1,3 +1,6 @@
+if (typeof process !== "undefined") {
+  process.env.VERCEL = process.env.VERCEL || "1";
+}
 import app, { ensureDataInitialized } from "../server.ts";
 
 export default async function handler(req: any, res: any) {

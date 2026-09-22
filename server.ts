@@ -4631,8 +4631,7 @@ OUTPUT FORMAT REQUIREMENTS:
     return server;
   }
 
-  // Auto-start server ONLY when executed directly as the main process
-  // AND not in a serverless environment (Vercel, Netlify, AWS Lambda)
+  // Auto-start server when executed outside serverless environments (e.g. Local Dev, AI Studio, Cloud Run)
   const isServerless = Boolean(
     process.env.VERCEL ||
     process.env.VERCEL_ENV ||
@@ -4643,17 +4642,7 @@ OUTPUT FORMAT REQUIREMENTS:
     process.env.NETLIFY
   );
 
-  const isMainProcess = Boolean(
-    typeof process !== "undefined" &&
-    process.argv &&
-    process.argv[1] &&
-    (process.argv[1].endsWith("server.ts") ||
-     process.argv[1].endsWith("server.cjs") ||
-     process.argv[1].endsWith("server.js") ||
-     process.argv[1].endsWith("tsx"))
-  );
-
-  if (isMainProcess && !isServerless) {
+  if (!isServerless) {
     startServer().catch((err) => {
       console.error("Failed to start server:", err);
     });

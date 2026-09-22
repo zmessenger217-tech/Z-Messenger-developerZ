@@ -72,7 +72,7 @@ export interface User {
   fullName: string;
   avatar: string;
   role?: "user" | "superadmin";
-  status: "online" | "offline";
+  status: "online" | "offline" | "in-call";
   createdAt?: number;
   lastSeen?: number;
   about?: string;
@@ -91,7 +91,7 @@ export interface GroupMember {
   username: string;
   fullName: string;
   avatar: string;
-  status: "online" | "offline";
+  status: "online" | "offline" | "in-call";
   role?: "admin" | "member";
   about?: string;
 }
@@ -116,7 +116,7 @@ export interface Contact {
   username: string;
   fullName: string;
   avatar: string;
-  status: "online" | "offline";
+  status: "online" | "offline" | "in-call";
   lastSeen?: number;
   lastMessage?: string;
   lastMessageTime?: number;
@@ -139,7 +139,7 @@ export interface AdminUser {
   fullName: string;
   avatar: string;
   role: "user" | "superadmin";
-  status: "online" | "offline";
+  status: "online" | "offline" | "in-call";
   createdAt: number;
   lastSeen: number;
   contactsCount?: number;
@@ -186,18 +186,21 @@ export interface MessageMetadata {
   sentViaApi?: boolean;
   triggerMatched?: string;
   caption?: string;
+  isSystemReport?: boolean;
+  systemSoftwareName?: string;
+  recordTitle?: string;
 }
 
 export interface Message {
   id: string;
   conversationId: string;
   senderId: string;
-  receiverId: string;
+  receiverId?: string;
   type: MessageType;
   content: string;
   metadata?: MessageMetadata;
   timestamp: number;
-  read: boolean;
+  read?: boolean;
   isGroup?: boolean;
   groupId?: string;
   senderName?: string;

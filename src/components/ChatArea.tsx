@@ -1029,12 +1029,17 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
                   {msg.reactions && Object.keys(msg.reactions).length > 0 && (
                     <div className="flex flex-wrap gap-1 mt-1.5 pt-1.5 border-t border-white/15">
                       {Object.entries(
-                        Object.values(msg.reactions).reduce((acc: Record<string, number>, em: string) => {
-                          acc[em] = (acc[em] || 0) + 1;
+                        Object.values(msg.reactions).flat().reduce((acc: Record<string, number>, em: any) => {
+                          if (typeof em === "string") {
+                            acc[em] = (acc[em] || 0) + 1;
+                          }
                           return acc;
-                        }, {})
+                        }, {} as Record<string, number>)
                       ).map(([em, cnt]) => {
-                        const isMyReaction = msg.reactions?.[currentUser.id] === em;
+                        const myReactionVal = msg.reactions?.[currentUser.id];
+                        const isMyReaction = Array.isArray(myReactionVal)
+                          ? myReactionVal.includes(em)
+                          : myReactionVal === em;
                         return (
                           <button
                             key={em}

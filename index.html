@@ -63,27 +63,6 @@
             return true;
           }
         });
-
-        // Patch WebSocket error event dispatcher to mute connection warnings for vite-hmr
-        if (typeof window.WebSocket !== 'undefined') {
-          const OrigWebSocket = window.WebSocket;
-          window.WebSocket = function(url, protocols) {
-            const ws = protocols !== undefined ? new OrigWebSocket(url, protocols) : new OrigWebSocket(url);
-            ws.addEventListener('error', function(errEvent) {
-              if (String(url).includes('token=') || String(protocols).includes('vite-hmr') || errEvent) {
-                if (errEvent && errEvent.stopImmediatePropagation) {
-                  errEvent.stopImmediatePropagation();
-                }
-              }
-            });
-            return ws;
-          };
-          window.WebSocket.prototype = OrigWebSocket.prototype;
-          window.WebSocket.CONNECTING = OrigWebSocket.CONNECTING;
-          window.WebSocket.OPEN = OrigWebSocket.OPEN;
-          window.WebSocket.CLOSING = OrigWebSocket.CLOSING;
-          window.WebSocket.CLOSED = OrigWebSocket.CLOSED;
-        }
       })();
     </script>
     <meta charset="UTF-8" />

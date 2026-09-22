@@ -960,12 +960,20 @@ export const app = express();
 
 // Normalize pre-parsed bodies from serverless runtimes (Vercel / Netlify / AWS Lambda)
 app.use((req, _res, next) => {
-  if (req.body && typeof req.body === "string" && req.body.trim()) {
-    try {
-      req.body = JSON.parse(req.body);
-    } catch (_e) {}
-  }
-  if (req.body !== undefined && req.body !== null && typeof req.body === "object") {
+  if (req.body !== undefined && req.body !== null) {
+    (req as any)._body = true;
+    if (typeof req.body === "string" && req.body.trim()) {
+      try {
+        req.body = JSON.parse(req.body);
+      } catch (_e) {}
+    } else if (Buffer.isBuffer(req.body)) {
+      try {
+        req.body = JSON.parse(req.body.toString("utf8"));
+      } catch (_e) {}
+    }
+  } else if ((req as any).readableEnded || (req as any).complete) {
+    // Stream has already ended from serverless wrapper
+    req.body = {};
     (req as any)._body = true;
   }
   next();
@@ -4623,16 +4631,29 @@ OUTPUT FORMAT REQUIREMENTS:
     return server;
   }
 
-  // Auto-start server when executed outside serverless environments
+  // Auto-start server ONLY when executed directly as the main process
+  // AND not in a serverless environment (Vercel, Netlify, AWS Lambda)
   const isServerless = Boolean(
     process.env.VERCEL ||
     process.env.VERCEL_ENV ||
+    process.env.VERCEL_REGION ||
+    process.env.NOW_REGION ||
     process.env.AWS_LAMBDA_FUNCTION_NAME ||
     process.env.LAMBDA_TASK_ROOT ||
     process.env.NETLIFY
   );
 
-  if (!isServerless) {
+  const isMainProcess = Boolean(
+    typeof process !== "undefined" &&
+    process.argv &&
+    process.argv[1] &&
+    (process.argv[1].endsWith("server.ts") ||
+     process.argv[1].endsWith("server.cjs") ||
+     process.argv[1].endsWith("server.js") ||
+     process.argv[1].endsWith("tsx"))
+  );
+
+  if (isMainProcess && !isServerless) {
     startServer().catch((err) => {
       console.error("Failed to start server:", err);
     });

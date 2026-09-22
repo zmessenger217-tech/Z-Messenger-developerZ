@@ -2,41 +2,59 @@ import app, { ensureDataInitialized } from "../server.ts";
 
 export default async function handler(req: any, res: any) {
   // 1. Normalize request body from Vercel Serverless Function runtime
-  if (typeof req.body === "string" && req.body.trim()) {
-    try {
-      req.body = JSON.parse(req.body);
-    } catch (_e) {}
-  }
-  // Signal to Express body-parser that body is already parsed so it won't hang on consumed stream
-  if (req.body !== undefined && req.body !== null && typeof req.body === "object") {
+  if (req.body !== undefined && req.body !== null) {
+    req._body = true;
+    if (typeof req.body === "string" && req.body.trim()) {
+      try {
+        req.body = JSON.parse(req.body);
+      } catch (_e) {}
+    } else if (Buffer.isBuffer(req.body)) {
+      try {
+        req.body = JSON.parse(req.body.toString("utf8"));
+      } catch (_e) {}
+    }
+  } else if (req.readableEnded || req.complete) {
+    req.body = {};
     req._body = true;
   }
 
   // 2. Comprehensive URL normalization across Vercel rewrite modes and dynamic routes
   let targetPath = "";
+  let queryString = "";
+
+  // Extract query string from original req.url if present
+  if (typeof req.url === "string" && req.url.includes("?")) {
+    const qIdx = req.url.indexOf("?");
+    const rawParams = new URLSearchParams(req.url.slice(qIdx + 1));
+    rawParams.delete("path");
+    rawParams.delete("__route");
+    const qs = rawParams.toString();
+    if (qs) queryString = "?" + qs;
+  }
 
   // A. Check if invoked from dynamic catch-all route api/[...path].ts
   if (req.query?.path) {
     const segments = Array.isArray(req.query.path) ? req.query.path : [req.query.path];
-    targetPath = "/api/" + segments.map((s: string) => encodeURIComponent(s)).join("/");
+    targetPath = "/api/" + segments.map((s: string) => encodeURIComponent(s)).join("/") + queryString;
   }
 
   // B. Check if rewritten with __route query param: /api?__route=auth/login
-  if (!targetPath) {
+  if (!targetPath && (req.query?.__route || (typeof req.url === "string" && req.url.includes("__route=")))) {
     try {
       const parsedUrl = new URL(req.url, "http://localhost");
-      const subRoute = parsedUrl.searchParams.get("__route");
+      const subRoute = req.query?.__route || parsedUrl.searchParams.get("__route");
       if (subRoute) {
         parsedUrl.searchParams.delete("__route");
+        parsedUrl.searchParams.delete("path");
         const remainingQuery = parsedUrl.searchParams.toString();
-        targetPath = "/api/" + subRoute.replace(/^\//, "") + (remainingQuery ? "?" + remainingQuery : "");
+        targetPath = "/api/" + String(subRoute).replace(/^\//, "") + (remainingQuery ? "?" + remainingQuery : "");
       }
     } catch (_e) {}
   }
 
   // C. Check forwarded URI or original URL headers (never accept pattern placeholders like [...path])
   if (!targetPath) {
-    const fwdUri = (req.headers?.["x-forwarded-uri"] as string) || (req.headers?.["x-original-url"] as string);
+    const fwdUri = (req.headers?.["x-forwarded-uri"] as string) || (req.headers?.["x-original-url"] as string) || (req.headers?.["x-matched-path"] as string);
     if (fwdUri && (fwdUri.startsWith("/api") || fwdUri.startsWith("/uploads")) && !fwdUri.includes("[")) {
       targetPath = fwdUri;
     }

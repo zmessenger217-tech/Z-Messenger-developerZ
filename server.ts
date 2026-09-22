@@ -4495,7 +4495,7 @@ OUTPUT FORMAT REQUIREMENTS:
 
   export async function startServer() {
     const server = http.createServer(app);
-    const PORT = 3000;
+    const PORT = Number(process.env.PORT) || 3000;
 
     // Initialize native WebSocket server on the same HTTP port
     const wss = new WebSocketServer({ server, path: "/ws" });

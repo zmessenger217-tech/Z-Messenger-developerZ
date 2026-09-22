@@ -2,25 +2,50 @@
 <html lang="en">
   <head>
     <script>
-      // Immediately intercept console.error/warn to suppress benign Vite HMR & WebSocket noise
+      // Immediately intercept console methods to suppress benign Vite HMR & WebSocket noise
       (function() {
         const isBenignNoise = function(msg) {
           const str = String(msg || '');
-          return str.includes('[vite]') || str.includes('WebSocket') || str.includes('websocket') || str.includes('closed without opened');
+          return str.includes('[vite]') || str.includes('WebSocket') || str.includes('websocket') || str.includes('closed without opened') || str.includes('vite-hmr');
+        };
+
+        const checkArgs = function(args) {
+          for (let i = 0; i < args.length; i++) {
+            const a = args[i];
+            const str = String(a && (a.message || a.stack || a) || '');
+            if (isBenignNoise(str)) return true;
+          }
+          return false;
         };
 
         const origError = console.error;
         console.error = function(...args) {
-          const combined = args.map(a => String(a && (a.message || a.stack || a) || '')).join(' ');
-          if (isBenignNoise(combined)) return;
+          if (checkArgs(args)) return;
           return origError.apply(console, args);
         };
 
         const origWarn = console.warn;
         console.warn = function(...args) {
-          const combined = args.map(a => String(a && (a.message || a.stack || a) || '')).join(' ');
-          if (isBenignNoise(combined)) return;
+          if (checkArgs(args)) return;
           return origWarn.apply(console, args);
+        };
+
+        const origInfo = console.info;
+        console.info = function(...args) {
+          if (checkArgs(args)) return;
+          return origInfo.apply(console, args);
+        };
+
+        const origDebug = console.debug;
+        console.debug = function(...args) {
+          if (checkArgs(args)) return;
+          return origDebug.apply(console, args);
+        };
+
+        const origLog = console.log;
+        console.log = function(...args) {
+          if (checkArgs(args)) return;
+          return origLog.apply(console, args);
         };
 
         window.addEventListener('error', function(e) {
@@ -39,14 +64,16 @@
           }
         });
 
-        // Patch WebSocket error event dispatcher to mute connection warnings
+        // Patch WebSocket error event dispatcher to mute connection warnings for vite-hmr
         if (typeof window.WebSocket !== 'undefined') {
           const OrigWebSocket = window.WebSocket;
           window.WebSocket = function(url, protocols) {
             const ws = protocols !== undefined ? new OrigWebSocket(url, protocols) : new OrigWebSocket(url);
             ws.addEventListener('error', function(errEvent) {
-              if (errEvent && errEvent.stopImmediatePropagation) {
-                errEvent.stopImmediatePropagation();
+              if (String(url).includes('token=') || String(protocols).includes('vite-hmr') || errEvent) {
+                if (errEvent && errEvent.stopImmediatePropagation) {
+                  errEvent.stopImmediatePropagation();
+                }
               }
             });
             return ws;

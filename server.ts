@@ -4600,13 +4600,7 @@ OUTPUT FORMAT REQUIREMENTS:
     return server;
   }
 
-  // Auto-start server only when executed directly in container / local environment
-  const isDirectRun = Boolean(
-    process.argv[1] &&
-    (process.argv[1].endsWith("server.ts") ||
-     process.argv[1].endsWith("server.cjs") ||
-     process.argv[1].endsWith("server.js"))
-  );
+  // Auto-start server when executed outside serverless environments
   const isServerless = Boolean(
     process.env.VERCEL ||
     process.env.VERCEL_ENV ||
@@ -4615,7 +4609,7 @@ OUTPUT FORMAT REQUIREMENTS:
     process.env.NETLIFY
   );
 
-  if (isDirectRun && !isServerless) {
+  if (!isServerless) {
     startServer().catch((err) => {
       console.error("Failed to start server:", err);
     });

@@ -2,7 +2,6 @@ import express from "express";
 import http from "http";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { WebSocketServer, WebSocket } from "ws";
 import { initializeApp, getApps, getApp } from "firebase/app";
@@ -190,16 +189,35 @@ const botAccessRequests = new Map<string, ChatbotAccessRequest>(); // key: userI
 
 // Initialize Firestore
 let firestoreDb: Firestore | null = null;
+const DEFAULT_FIREBASE_CONFIG = {
+  projectId: "gen-lang-client-0813763992",
+  appId: "1:773494247789:web:5d8b29f5f56e50271fca64",
+  apiKey: "AIzaSyC9X3Z6u7vEl8YlEuoK0tXgvspoXSCf1wI",
+  authDomain: "gen-lang-client-0813763992.firebaseapp.com",
+  firestoreDatabaseId: "ai-studio-zmessenger-34763b82-27cd-4a3f-9971-54aabd5646ba",
+  storageBucket: "gen-lang-client-0813763992.firebasestorage.app",
+  messagingSenderId: "773494247789",
+  oAuthClientId: "773494247789-2a4jqj2qqjq7ju4evglinq0i0rs078do.apps.googleusercontent.com",
+};
+
 try {
+  let rawCfg: any = null;
   const cfgPath = path.join(process.cwd(), "firebase-applet-config.json");
   if (fs.existsSync(cfgPath)) {
-    const rawCfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
-    const fbApp = getApps().length > 0 ? getApp() : initializeApp(rawCfg);
-    firestoreDb = rawCfg.firestoreDatabaseId
-      ? getFirestore(fbApp, rawCfg.firestoreDatabaseId)
-      : getFirestore(fbApp);
-    console.log("Firebase Firestore initialized with database:", rawCfg.firestoreDatabaseId || "(default)");
+    rawCfg = JSON.parse(fs.readFileSync(cfgPath, "utf-8"));
+  } else if (process.env.FIREBASE_CONFIG) {
+    try {
+      rawCfg = JSON.parse(process.env.FIREBASE_CONFIG);
+    } catch (e) {}
   }
+  if (!rawCfg) {
+    rawCfg = DEFAULT_FIREBASE_CONFIG;
+  }
+  const fbApp = getApps().length > 0 ? getApp() : initializeApp(rawCfg);
+  firestoreDb = rawCfg.firestoreDatabaseId
+    ? getFirestore(fbApp, rawCfg.firestoreDatabaseId)
+    : getFirestore(fbApp);
+  console.log("Firebase Firestore initialized with database:", rawCfg.firestoreDatabaseId || "(default)");
 } catch (err) {
   console.warn("Firebase Firestore initialization notice:", err);
 }
@@ -828,9 +846,18 @@ startxref
   await persistUserToFirestore(superadmin);
 }
 
-initializeServerData().catch((err) => {
-  console.error("Failed in initializeServerData:", err);
-});
+let initPromise: Promise<void> | null = null;
+export function ensureDataInitialized(): Promise<void> {
+  if (!initPromise) {
+    initPromise = initializeServerData().catch((err) => {
+      console.error("Failed in initializeServerData:", err);
+    });
+  }
+  return initPromise;
+}
+
+// Preload Firestore records in background
+ensureDataInitialized();
 
 // Real-time connections: SSE and native WebSocket
 const sseClients = new Map<string, express.Response[]>();
@@ -864,103 +891,30 @@ function notifyUser(userId: string, event: string, payload: any) {
   }
 }
 
-async function startServer() {
-  const app = express();
-  const server = http.createServer(app);
-  const PORT = 3000;
+export const app = express();
 
-  // Initialize native WebSocket server on the same HTTP port
-  const wss = new WebSocketServer({ server, path: "/ws" });
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
-  wss.on("connection", (ws, req) => {
-    let currentUserId: string | null = null;
-    try {
-      const url = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
-      const qUid = url.searchParams.get("userId");
-      if (qUid) {
-        currentUserId = qUid;
-        if (!userSockets.has(qUid)) userSockets.set(qUid, new Set());
-        userSockets.get(qUid)!.add(ws);
-      }
-    } catch (e) {}
+// CORS for cross-origin and Vercel compatibility
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(200);
+    return;
+  }
+  next();
+});
 
-    ws.on("message", (raw) => {
-      try {
-        const payload = JSON.parse(raw.toString());
-        if (payload.type === "register" && payload.userId) {
-          currentUserId = payload.userId;
-          if (!userSockets.has(payload.userId)) userSockets.set(payload.userId, new Set());
-          userSockets.get(payload.userId)!.add(ws);
-          ws.send(JSON.stringify({ type: "registered", userId: payload.userId }));
-        } else if (payload.type === "webrtc_signal" && payload.targetUserId) {
-          notifyUser(payload.targetUserId, "webrtc_signal", payload.payload || payload);
-        } else if (payload.type === "incoming_call" && payload.targetUserId) {
-          notifyUser(payload.targetUserId, "incoming_call", payload.payload || payload);
-        } else if (payload.type === "call_accepted" && payload.targetUserId) {
-          notifyUser(payload.targetUserId, "call_accepted", payload.payload || payload);
-        } else if (payload.type === "call_declined" && payload.targetUserId) {
-          notifyUser(payload.targetUserId, "call_declined", payload.payload || payload);
-        } else if (payload.type === "call_cancelled" && payload.targetUserId) {
-          notifyUser(payload.targetUserId, "call_cancelled", payload.payload || payload);
-        } else if (payload.type === "call_ended" && payload.targetUserId) {
-          notifyUser(payload.targetUserId, "call_ended", payload.payload || payload);
-        } else if (payload.type === "typing_start" || payload.type === "typing_stop") {
-          const senderId = payload.userId || currentUserId;
-          const targetUserId = payload.targetUserId;
-          const targetGroupId = payload.targetGroupId;
-          const eventType = payload.type;
-          const typingData = {
-            type: eventType,
-            userId: senderId,
-            username: payload.username || "",
-            fullName: payload.fullName || "",
-            targetUserId,
-            targetGroupId,
-            conversationId: payload.conversationId,
-            timestamp: Date.now(),
-          };
-
-          if (targetGroupId) {
-            const grp = groups.get(targetGroupId);
-            if (grp && Array.isArray(grp.memberIds)) {
-              for (const mId of grp.memberIds) {
-                if (mId !== senderId) {
-                  notifyUser(mId, eventType, typingData);
-                }
-              }
-            }
-          } else if (targetUserId) {
-            notifyUser(targetUserId, eventType, typingData);
-          }
-        } else if (payload.type === "ping") {
-          ws.send(JSON.stringify({ type: "pong", time: Date.now() }));
-        }
-      } catch (err) {}
-    });
-
-    ws.on("close", () => {
-      if (currentUserId && userSockets.has(currentUserId)) {
-        const set = userSockets.get(currentUserId)!;
-        set.delete(ws);
-        if (set.size === 0) userSockets.delete(currentUserId);
-      }
-    });
-  });
-
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
-
-  // CORS for development compatibility
-  app.use((req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*");
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept, Authorization");
-    if (req.method === "OPTIONS") {
-      res.sendStatus(200);
-      return;
-    }
-    next();
-  });
+// Middleware to ensure Firestore database is ready before serving API calls
+app.use(async (req, _res, next) => {
+  if (req.path.startsWith("/api")) {
+    await ensureDataInitialized();
+  }
+  next();
+});
 
   // Health check
   app.get("/api/health", (_req, res) => {
@@ -4387,29 +4341,121 @@ OUTPUT FORMAT REQUIREMENTS:
   });
 
   // -------------------------------------------------------------
-  // VITE & STATIC SERVING
+  // SERVER START & STANDALONE CONTAINER LISTENER
   // -------------------------------------------------------------
 
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: {
-        middlewareMode: true,
-        hmr: false,
-      },
-      appType: "spa",
+  export async function startServer() {
+    const server = http.createServer(app);
+    const PORT = 3000;
+
+    // Initialize native WebSocket server on the same HTTP port
+    const wss = new WebSocketServer({ server, path: "/ws" });
+
+    wss.on("connection", (ws, req) => {
+      let currentUserId: string | null = null;
+      try {
+        const url = new URL(req.url || "", `http://${req.headers.host || "localhost"}`);
+        const qUid = url.searchParams.get("userId");
+        if (qUid) {
+          currentUserId = qUid;
+          if (!userSockets.has(qUid)) userSockets.set(qUid, new Set());
+          userSockets.get(qUid)!.add(ws);
+        }
+      } catch (e) {}
+
+      ws.on("message", (raw) => {
+        try {
+          const payload = JSON.parse(raw.toString());
+          if (payload.type === "register" && payload.userId) {
+            currentUserId = payload.userId;
+            if (!userSockets.has(payload.userId)) userSockets.set(payload.userId, new Set());
+            userSockets.get(payload.userId)!.add(ws);
+            ws.send(JSON.stringify({ type: "registered", userId: payload.userId }));
+          } else if (payload.type === "webrtc_signal" && payload.targetUserId) {
+            notifyUser(payload.targetUserId, "webrtc_signal", payload.payload || payload);
+          } else if (payload.type === "incoming_call" && payload.targetUserId) {
+            notifyUser(payload.targetUserId, "incoming_call", payload.payload || payload);
+          } else if (payload.type === "call_accepted" && payload.targetUserId) {
+            notifyUser(payload.targetUserId, "call_accepted", payload.payload || payload);
+          } else if (payload.type === "call_declined" && payload.targetUserId) {
+            notifyUser(payload.targetUserId, "call_declined", payload.payload || payload);
+          } else if (payload.type === "call_cancelled" && payload.targetUserId) {
+            notifyUser(payload.targetUserId, "call_cancelled", payload.payload || payload);
+          } else if (payload.type === "call_ended" && payload.targetUserId) {
+            notifyUser(payload.targetUserId, "call_ended", payload.payload || payload);
+          } else if (payload.type === "typing_start" || payload.type === "typing_stop") {
+            const senderId = payload.userId || currentUserId;
+            const targetUserId = payload.targetUserId;
+            const targetGroupId = payload.targetGroupId;
+            const eventType = payload.type;
+            const typingData = {
+              type: eventType,
+              userId: senderId,
+              username: payload.username || "",
+              fullName: payload.fullName || "",
+              targetUserId,
+              targetGroupId,
+              conversationId: payload.conversationId,
+              timestamp: Date.now(),
+            };
+
+            if (targetGroupId) {
+              const grp = groups.get(targetGroupId);
+              if (grp && Array.isArray(grp.memberIds)) {
+                for (const mId of grp.memberIds) {
+                  if (mId !== senderId) {
+                    notifyUser(mId, eventType, typingData);
+                  }
+                }
+              }
+            } else if (targetUserId) {
+              notifyUser(targetUserId, eventType, typingData);
+            }
+          } else if (payload.type === "ping") {
+            ws.send(JSON.stringify({ type: "pong", time: Date.now() }));
+          }
+        } catch (err) {}
+      });
+
+      ws.on("close", () => {
+        if (currentUserId && userSockets.has(currentUserId)) {
+          const set = userSockets.get(currentUserId)!;
+          set.delete(ws);
+          if (set.size === 0) userSockets.delete(currentUserId);
+        }
+      });
     });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+
+    if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+      const { createServer: createViteServer } = await import("vite");
+      const vite = await createViteServer({
+        server: {
+          middlewareMode: true,
+          hmr: false,
+        },
+        appType: "spa",
+      });
+      app.use(vite.middlewares);
+    } else if (!process.env.VERCEL) {
+      const distPath = path.join(process.cwd(), "dist");
+      app.use(express.static(distPath));
+      app.get("*", (_req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
+
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log(`Z-messenger server running on http://0.0.0.0:${PORT}`);
+    });
+
+    return server;
+  }
+
+  // Auto-start server in container / local node environment
+  if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    startServer().catch((err) => {
+      console.error("Failed to start server:", err);
     });
   }
 
-  server.listen(PORT, "0.0.0.0", () => {
-    console.log(`Z-messenger server running on http://0.0.0.0:${PORT}`);
-  });
-}
-
-startServer();
+  export default app;

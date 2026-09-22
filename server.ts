@@ -641,80 +641,105 @@ Key Directives:
   return `Hello ${senderName}! This is an automated response from ${botOwner.fullName}'s AI Chatbot. I have securely recorded your message and notified ${botOwner.fullName}, who will get back to you shortly.${customNote}`;
 }
 
-// Sync stored data from Cloud Firestore on start
-async function loadDataFromFirestore(retries = 2) {
+// Sync stored data from Cloud Firestore on start (fast parallel fetch)
+async function loadDataFromFirestore(retries = 1) {
   if (!firestoreDb) return;
   try {
+    const [
+      usersResult,
+      contactsResult,
+      groupsResult,
+      messagesResult,
+      storiesResult,
+      reportsResult,
+      botReqResult,
+    ] = await Promise.allSettled([
+      getDocs(collection(firestoreDb, "users")),
+      getDocs(collection(firestoreDb, "contacts")),
+      getDocs(collection(firestoreDb, "groups")),
+      getDocs(collection(firestoreDb, "messages")),
+      getDocs(collection(firestoreDb, "stories")),
+      getDocs(collection(firestoreDb, "reports")),
+      getDocs(collection(firestoreDb, "bot_requests")),
+    ]);
+
     // 1. Users
-    const usersSnap = await getDocs(collection(firestoreDb, "users"));
-    usersSnap.forEach((d) => {
-      const u = d.data() as UserRecord;
-      if (u && u.id) {
-        users.set(u.id, u);
-        if (u.email) userByEmail.set(u.email.toLowerCase(), u.id);
-        if (u.username) userByUsername.set(u.username.toLowerCase(), u.id);
-      }
-    });
+    if (usersResult.status === "fulfilled") {
+      usersResult.value.forEach((d) => {
+        const u = d.data() as UserRecord;
+        if (u && u.id) {
+          users.set(u.id, u);
+          if (u.email) userByEmail.set(u.email.toLowerCase(), u.id);
+          if (u.username) userByUsername.set(u.username.toLowerCase(), u.id);
+        }
+      });
+    }
 
     // 2. Contacts
-    const contactsSnap = await getDocs(collection(firestoreDb, "contacts"));
-    contactsSnap.forEach((d) => {
-      const data = d.data() as { userId: string; contactIds: string[] };
-      if (data && data.userId && Array.isArray(data.contactIds)) {
-        contactsByUser.set(data.userId, new Set(data.contactIds));
-      }
-    });
+    if (contactsResult.status === "fulfilled") {
+      contactsResult.value.forEach((d) => {
+        const data = d.data() as { userId: string; contactIds: string[] };
+        if (data && data.userId && Array.isArray(data.contactIds)) {
+          contactsByUser.set(data.userId, new Set(data.contactIds));
+        }
+      });
+    }
 
     // 3. Groups
-    const groupsSnap = await getDocs(collection(firestoreDb, "groups"));
-    groupsSnap.forEach((d) => {
-      const g = d.data() as GroupRecord;
-      if (g && g.id) {
-        groups.set(g.id, g);
-      }
-    });
+    if (groupsResult.status === "fulfilled") {
+      groupsResult.value.forEach((d) => {
+        const g = d.data() as GroupRecord;
+        if (g && g.id) {
+          groups.set(g.id, g);
+        }
+      });
+    }
 
     // 4. Messages
-    const messagesSnap = await getDocs(collection(firestoreDb, "messages"));
-    messagesSnap.forEach((d) => {
-      const m = d.data() as MessageRecord;
-      if (m && m.id && !messages.some((existing) => existing.id === m.id)) {
-        messages.push(m);
-      }
-    });
+    if (messagesResult.status === "fulfilled") {
+      messagesResult.value.forEach((d) => {
+        const m = d.data() as MessageRecord;
+        if (m && m.id && !messages.some((existing) => existing.id === m.id)) {
+          messages.push(m);
+        }
+      });
+    }
 
     // 5. Stories (ignore expired > 24 hours)
-    const now = Date.now();
-    const storiesSnap = await getDocs(collection(firestoreDb, "stories"));
-    storiesSnap.forEach((d) => {
-      const s = d.data() as StoryRecord;
-      if (s && s.id && s.expiresAt > now) {
-        stories.set(s.id, s);
-      }
-    });
+    if (storiesResult.status === "fulfilled") {
+      const now = Date.now();
+      storiesResult.value.forEach((d) => {
+        const s = d.data() as StoryRecord;
+        if (s && s.id && s.expiresAt > now) {
+          stories.set(s.id, s);
+        }
+      });
+    }
 
     // 6. Reports
-    const reportsSnap = await getDocs(collection(firestoreDb, "reports"));
-    reportsSnap.forEach((d) => {
-      const r = d.data() as ReportRecord;
-      if (r && r.id) {
-        reports.set(r.id, r);
-      }
-    });
+    if (reportsResult.status === "fulfilled") {
+      reportsResult.value.forEach((d) => {
+        const r = d.data() as ReportRecord;
+        if (r && r.id) {
+          reports.set(r.id, r);
+        }
+      });
+    }
 
     // 7. Bot Access Requests
-    const botReqSnap = await getDocs(collection(firestoreDb, "bot_requests"));
-    botReqSnap.forEach((d) => {
-      const req = d.data() as ChatbotAccessRequest;
-      if (req && req.userId) {
-        botAccessRequests.set(req.userId, req);
-      }
-    });
+    if (botReqResult.status === "fulfilled") {
+      botReqResult.value.forEach((d) => {
+        const req = d.data() as ChatbotAccessRequest;
+        if (req && req.userId) {
+          botAccessRequests.set(req.userId, req);
+        }
+      });
+    }
 
     console.log(`Firestore loaded: ${users.size} users, ${groups.size} groups, ${messages.length} messages, ${reports.size} reports, ${botAccessRequests.size} bot requests.`);
   } catch (err: any) {
     if (retries > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 500));
       return loadDataFromFirestore(retries - 1);
     }
     console.warn("Notice: Firestore initial sync note:", err?.message || err);
@@ -864,11 +889,18 @@ startxref
   userByUsername.set("zassistant", zAssistantId);
   userByEmail.set("assistant@zmessenger.ai", zAssistantId);
 
-  // Load persistent records from Cloud Firestore
-  await loadDataFromFirestore();
+  // Load persistent records from Cloud Firestore with a 3-second safety race
+  try {
+    await Promise.race([
+      loadDataFromFirestore(),
+      new Promise((resolve) => setTimeout(resolve, 3000)),
+    ]);
+  } catch (err) {
+    console.warn("Notice: loadDataFromFirestore timeout/warning:", err);
+  }
 
-  // Make sure superadmin is safely stored in Firestore
-  await persistUserToFirestore(superadmin);
+  // Make sure superadmin is safely stored in Firestore asynchronously without blocking cold starts
+  persistUserToFirestore(superadmin).catch(() => {});
 }
 
 let initPromise: Promise<void> | null = null;
@@ -881,7 +913,7 @@ export function ensureDataInitialized(): Promise<void> {
   return initPromise;
 }
 
-// Preload Firestore records in background
+// Preload Firestore records in background without blocking
 ensureDataInitialized();
 
 // Real-time connections: SSE and native WebSocket
@@ -949,7 +981,12 @@ app.use((req, res, next) => {
 // Middleware to ensure Firestore database is ready before serving API calls
 app.use(async (req, _res, next) => {
   if (req.path.startsWith("/api")) {
-    await ensureDataInitialized();
+    try {
+      await Promise.race([
+        ensureDataInitialized(),
+        new Promise((resolve) => setTimeout(resolve, 1500)),
+      ]);
+    } catch (_e) {}
   }
   next();
 });
@@ -1169,27 +1206,53 @@ app.use(async (req, _res, next) => {
   // -------------------------------------------------------------
 
   // Check availability of email or username
-  app.get("/api/auth/check-availability", (req, res) => {
-    const { email, username, excludeUserId } = req.query;
-    let emailTaken = false;
-    let usernameTaken = false;
+  app.get("/api/auth/check-availability", async (req, res) => {
+    try {
+      const { email, username, excludeUserId } = req.query;
+      let emailTaken = false;
+      let usernameTaken = false;
 
-    if (email && typeof email === "string") {
-      const cleanEmail = email.trim().toLowerCase();
-      const existingId = userByEmail.get(cleanEmail);
-      if (existingId && existingId !== excludeUserId) {
-        emailTaken = true;
-      }
-    }
-    if (username && typeof username === "string") {
-      const cleanUsername = username.trim().toLowerCase().replace(/^@/, "");
-      const existingId = userByUsername.get(cleanUsername);
-      if (existingId && existingId !== excludeUserId) {
-        usernameTaken = true;
-      }
-    }
+      const cleanEmail = email && typeof email === "string" ? email.trim().toLowerCase() : "";
+      const cleanUsername = username && typeof username === "string" ? username.trim().toLowerCase().replace(/^@/, "") : "";
 
-    res.json({ emailTaken, usernameTaken });
+      // Quick Firestore sync check if empty map on serverless cold start
+      if (firestoreDb && users.size <= 2 && (cleanEmail || cleanUsername)) {
+        try {
+          const snap = await Promise.race([
+            getDocs(collection(firestoreDb, "users")),
+            new Promise<null>((r) => setTimeout(() => r(null), 1500)),
+          ]);
+          if (snap) {
+            snap.forEach((d) => {
+              const u = d.data() as UserRecord;
+              if (u && u.id) {
+                users.set(u.id, u);
+                if (u.email) userByEmail.set(u.email.toLowerCase(), u.id);
+                if (u.username) userByUsername.set(u.username.toLowerCase(), u.id);
+              }
+            });
+          }
+        } catch (_e) {}
+      }
+
+      if (cleanEmail) {
+        const existingId = userByEmail.get(cleanEmail);
+        if (existingId && existingId !== excludeUserId) {
+          emailTaken = true;
+        }
+      }
+      if (cleanUsername) {
+        const existingId = userByUsername.get(cleanUsername);
+        if (existingId && existingId !== excludeUserId) {
+          usernameTaken = true;
+        }
+      }
+
+      res.json({ emailTaken, usernameTaken });
+    } catch (err: any) {
+      console.error("Error in /api/auth/check-availability:", err);
+      res.json({ emailTaken: false, usernameTaken: false });
+    }
   });
 
   // Helper to ensure consistent user output with complete botConfig and apiKey
@@ -1257,17 +1320,22 @@ app.use(async (req, _res, next) => {
       // On serverless cold starts, verify against Firestore if not found in memory
       if ((!emailExists || !usernameExists) && firestoreDb) {
         try {
-          const usersSnap = await getDocs(collection(firestoreDb, "users"));
-          usersSnap.forEach((d) => {
-            const u = d.data() as UserRecord;
-            if (u && u.id) {
-              users.set(u.id, u);
-              if (u.email) userByEmail.set(u.email.toLowerCase(), u.id);
-              if (u.username) userByUsername.set(u.username.toLowerCase(), u.id);
-            }
-          });
-          emailExists = userByEmail.has(cleanEmail);
-          usernameExists = userByUsername.has(cleanUsername);
+          const usersSnap = await Promise.race([
+            getDocs(collection(firestoreDb, "users")),
+            new Promise<null>((r) => setTimeout(() => r(null), 2500)),
+          ]);
+          if (usersSnap) {
+            usersSnap.forEach((d) => {
+              const u = d.data() as UserRecord;
+              if (u && u.id) {
+                users.set(u.id, u);
+                if (u.email) userByEmail.set(u.email.toLowerCase(), u.id);
+                if (u.username) userByUsername.set(u.username.toLowerCase(), u.id);
+              }
+            });
+            emailExists = userByEmail.has(cleanEmail);
+            usernameExists = userByUsername.has(cleanUsername);
+          }
         } catch (_fsErr) {}
       }
 
@@ -1303,8 +1371,13 @@ app.use(async (req, _res, next) => {
       userByUsername.set(cleanUsername, userId);
       contactsByUser.set(userId, new Set<string>());
 
-      // Persist to Cloud Firestore and wait to prevent serverless freeze dropped write
-      await persistUserToFirestore(newUser);
+      // Persist to Cloud Firestore with safety timeout so slow WAN writes never drop the response
+      try {
+        await Promise.race([
+          persistUserToFirestore(newUser),
+          new Promise((r) => setTimeout(r, 2000)),
+        ]);
+      } catch (_saveErr) {}
 
       res.status(201).json({ success: true, user: createSafeUser(newUser) });
     } catch (err: any) {
@@ -1329,19 +1402,24 @@ app.use(async (req, _res, next) => {
         userId = userByUsername.get(cleanId);
       }
 
-      // If user wasn't in memory map, query Firestore users directly as fallback
+      // If user wasn't in memory map, query Firestore users directly as fallback with safety timeout
       if (!userId && firestoreDb) {
         try {
-          const usersSnap = await getDocs(collection(firestoreDb, "users"));
-          usersSnap.forEach((d) => {
-            const u = d.data() as UserRecord;
-            if (u && u.id) {
-              users.set(u.id, u);
-              if (u.email) userByEmail.set(u.email.toLowerCase(), u.id);
-              if (u.username) userByUsername.set(u.username.toLowerCase(), u.id);
-            }
-          });
-          userId = userByEmail.get(cleanId) || userByUsername.get(cleanId);
+          const usersSnap = await Promise.race([
+            getDocs(collection(firestoreDb, "users")),
+            new Promise<null>((r) => setTimeout(() => r(null), 2500)),
+          ]);
+          if (usersSnap) {
+            usersSnap.forEach((d) => {
+              const u = d.data() as UserRecord;
+              if (u && u.id) {
+                users.set(u.id, u);
+                if (u.email) userByEmail.set(u.email.toLowerCase(), u.id);
+                if (u.username) userByUsername.set(u.username.toLowerCase(), u.id);
+              }
+            });
+            userId = userByEmail.get(cleanId) || userByUsername.get(cleanId);
+          }
         } catch (fsErr) {
           console.warn("Firestore lookup fallback error in /api/auth/login:", fsErr);
         }
@@ -1371,7 +1449,13 @@ app.use(async (req, _res, next) => {
       const userRole = user.role || (user.email === "hashir0047@gmail.com" ? "superadmin" : "user");
       user.role = userRole;
 
-      await persistUserToFirestore(user);
+      // Persist to Cloud Firestore with safety timeout
+      try {
+        await Promise.race([
+          persistUserToFirestore(user),
+          new Promise((r) => setTimeout(r, 2000)),
+        ]);
+      } catch (_saveErr) {}
 
       res.json({ success: true, user: createSafeUser(user) });
     } catch (err: any) {
@@ -4516,8 +4600,22 @@ OUTPUT FORMAT REQUIREMENTS:
     return server;
   }
 
-  // Auto-start server in container / local node environment
-  if (!process.env.VERCEL && !process.env.VERCEL_ENV && !process.env.AWS_LAMBDA_FUNCTION_NAME && !process.env.NETLIFY) {
+  // Auto-start server only when executed directly in container / local environment
+  const isDirectRun = Boolean(
+    process.argv[1] &&
+    (process.argv[1].endsWith("server.ts") ||
+     process.argv[1].endsWith("server.cjs") ||
+     process.argv[1].endsWith("server.js"))
+  );
+  const isServerless = Boolean(
+    process.env.VERCEL ||
+    process.env.VERCEL_ENV ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.env.LAMBDA_TASK_ROOT ||
+    process.env.NETLIFY
+  );
+
+  if (isDirectRun && !isServerless) {
     startServer().catch((err) => {
       console.error("Failed to start server:", err);
     });

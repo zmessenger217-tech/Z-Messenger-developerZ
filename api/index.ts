@@ -12,55 +12,106 @@ export default async function handler(req: any, res: any) {
     req._body = true;
   }
 
-  // 2. Comprehensive URL normalization across Vercel rewrite modes and proxies
-  const matchedPath =
-    (req.headers?.["x-matched-path"] as string) ||
-    (req.headers?.["x-vercel-matched-path"] as string) ||
-    (req.headers?.["x-forwarded-uri"] as string) ||
-    (req.headers?.["x-original-url"] as string);
+  // 2. Comprehensive URL normalization across Vercel rewrite modes and dynamic routes
+  let targetPath = "";
 
-  if (matchedPath && (matchedPath.startsWith("/api") || matchedPath.startsWith("/uploads"))) {
-    req.url = matchedPath;
-  } else {
+  // A. Check if invoked from dynamic catch-all route api/[...path].ts
+  if (req.query?.path) {
+    const segments = Array.isArray(req.query.path) ? req.query.path : [req.query.path];
+    targetPath = "/api/" + segments.map((s: string) => encodeURIComponent(s)).join("/");
+  }
+
+  // B. Check if rewritten with __route query param: /api?__route=auth/login
+  if (!targetPath) {
     try {
       const parsedUrl = new URL(req.url, "http://localhost");
       const subRoute = parsedUrl.searchParams.get("__route");
       if (subRoute) {
         parsedUrl.searchParams.delete("__route");
         const remainingQuery = parsedUrl.searchParams.toString();
-        req.url = "/api/" + subRoute.replace(/^\//, "") + (remainingQuery ? "?" + remainingQuery : "");
+        targetPath = "/api/" + subRoute.replace(/^\//, "") + (remainingQuery ? "?" + remainingQuery : "");
       }
     } catch (_e) {}
   }
 
-  // Ensure request URL preserves the /api route prefix expected by Express
-  if (req.url && !req.url.startsWith("/api") && !req.url.startsWith("/uploads")) {
-    req.url = "/api" + (req.url.startsWith("/") ? req.url : "/" + req.url);
+  // C. Check forwarded URI or original URL headers (never accept pattern placeholders like [...path])
+  if (!targetPath) {
+    const fwdUri = (req.headers?.["x-forwarded-uri"] as string) || (req.headers?.["x-original-url"] as string);
+    if (fwdUri && (fwdUri.startsWith("/api") || fwdUri.startsWith("/uploads")) && !fwdUri.includes("[")) {
+      targetPath = fwdUri;
+    }
   }
 
-  // 3. Ensure Cloud Firestore and initial server records are loaded
+  // D. Check raw req.url
+  if (!targetPath) {
+    const rawUrl = req.url || "";
+    if ((rawUrl.startsWith("/api") || rawUrl.startsWith("/uploads")) && !rawUrl.includes("[")) {
+      targetPath = rawUrl;
+    }
+  }
+
+  // E. Fallback
+  if (!targetPath) {
+    targetPath = req.url || "/api";
+  }
+
+  // Ensure request URL preserves the /api route prefix expected by Express
+  if (!targetPath.startsWith("/api") && !targetPath.startsWith("/uploads")) {
+    targetPath = "/api" + (targetPath.startsWith("/") ? targetPath : "/" + targetPath);
+  }
+
+  req.url = targetPath;
+  req.originalUrl = targetPath;
+
+  // 3. Ensure Cloud Firestore and initial server records are loaded with a non-blocking timeout
   try {
-    await ensureDataInitialized();
+    await Promise.race([
+      ensureDataInitialized(),
+      new Promise((resolve) => setTimeout(resolve, 2000)),
+    ]);
   } catch (err) {
     console.warn("Notice: ensureDataInitialized background warning in Vercel handler:", err);
   }
 
-  // 4. Wrap Express invocation in a Promise that waits until response is fully sent
-  // This prevents Vercel from terminating the serverless function early (which causes 500 errors)
-  return new Promise<void>((resolve, reject) => {
-    res.on("finish", () => resolve());
-    res.on("close", () => resolve());
-    res.on("error", (err: any) => reject(err));
-
-    app(req, res, (err: any) => {
-      if (err) {
-        console.error("Vercel Express serverless error:", err);
-        if (!res.headersSent) {
-          res.status(500).json({ error: err?.message || "Internal server error" });
-        }
+  // 4. Wrap Express invocation in a safe Promise that guarantees termination
+  return new Promise<void>((resolve) => {
+    let completed = false;
+    const done = () => {
+      if (!completed) {
+        completed = true;
         resolve();
       }
-    });
+    };
+
+    res.once("finish", done);
+    res.once("close", done);
+    res.once("error", () => done());
+
+    // 25-second maximum safety timeout to guarantee the promise never hangs indefinitely
+    const timer = setTimeout(done, 25000);
+
+    try {
+      app(req, res, (err: any) => {
+        clearTimeout(timer);
+        if (err) {
+          console.error("Vercel Express serverless error:", err);
+          if (!res.headersSent) {
+            res.status(500).json({ error: err?.message || "Internal server error" });
+          }
+        } else if (!res.headersSent) {
+          console.warn(`[Vercel Serverless] Unmatched route: ${req.method} ${req.url}`);
+          res.status(404).json({ error: `Not found: ${req.method} ${req.url}` });
+        }
+        done();
+      });
+    } catch (invocationErr: any) {
+      clearTimeout(timer);
+      console.error("Vercel Express invocation exception:", invocationErr);
+      if (!res.headersSent) {
+        res.status(500).json({ error: invocationErr?.message || "Internal server error" });
+      }
+      done();
+    }
   });
 }
 

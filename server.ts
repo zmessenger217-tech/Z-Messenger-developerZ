@@ -4639,10 +4639,27 @@ OUTPUT FORMAT REQUIREMENTS:
     process.env.NOW_REGION ||
     process.env.AWS_LAMBDA_FUNCTION_NAME ||
     process.env.LAMBDA_TASK_ROOT ||
-    process.env.NETLIFY
+    process.env.NETLIFY ||
+    process.env._HANDLER ||
+    (process.argv && process.argv.some((arg) => arg && (arg.includes("api/") || arg.includes("api\\") || arg.includes("___vc"))))
   );
 
-  if (!isServerless) {
+  let isEntrypoint = false;
+  try {
+    if (typeof process !== "undefined" && process.argv && process.argv[1]) {
+      const mainScript = path.resolve(process.argv[1]);
+      isEntrypoint =
+        process.argv[1].endsWith("server.ts") ||
+        process.argv[1].endsWith("server.cjs") ||
+        process.argv[1].endsWith("server.js") ||
+        process.argv[1].endsWith("tsx") ||
+        (mainScript.includes("server.") && !mainScript.includes("api/"));
+    }
+  } catch (_e) {
+    isEntrypoint = false;
+  }
+
+  if (!isServerless && isEntrypoint) {
     startServer().catch((err) => {
       console.error("Failed to start server:", err);
     });

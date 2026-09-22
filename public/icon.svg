@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="pwa-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#ea580c" />
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#000000" flood-opacity="0.25" />
+    </filter>
+  </defs>
+  <!-- Background Badge -->
+  <rect width="512" height="512" rx="128" fill="url(#pwa-grad)" />
+  <!-- Inner Messenger Card -->
+  <rect x="76" y="76" width="360" height="360" rx="96" fill="#0f172a" filter="url(#shadow)" />
+  <!-- Lightning 'Z' Icon -->
+  <path d="M 160 160 L 352 160 C 362 160 368 172 360 180 L 210 328 L 352 328 C 360 328 368 336 368 344 C 368 352 360 360 352 360 L 160 360 C 150 360 144 348 152 340 L 302 192 L 160 192 C 152 192 144 184 144 176 C 144 168 152 160 160 160 Z" fill="#ffffff" />
+  <!-- Active Message Dot -->
+  <circle cx="360" cy="152" r="24" fill="#22c55e" stroke="#0f172a" stroke-width="8" />
+</svg>

@@ -18,6 +18,7 @@ import { SuperAdminModal } from "./components/SuperAdminModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { ReportUserModal } from "./components/ReportUserModal";
 import { NotificationBanner, ActiveNotification } from "./components/NotificationBanner";
+import { OfflineIndicator } from "./components/OfflineIndicator";
 import { playMessageChime, showDesktopNotification } from "./utils/notifications";
 
 export default function App() {
@@ -873,6 +874,9 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Offline Status Badge */}
+      <OfflineIndicator />
     </div>
   );
 }

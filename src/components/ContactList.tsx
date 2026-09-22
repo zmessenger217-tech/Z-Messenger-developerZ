@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { User, Contact, Story } from "../types";
 import { AppLogo } from "./AppLogo";
 import { UserProfileModal } from "./UserProfileModal";
+import { PWAInstallButton } from "./PWAInstallButton";
 import {
   UserPlus,
   Search,
@@ -95,6 +96,9 @@ export const ContactList: React.FC<ContactListProps> = ({
         <AppLogo size="sm" showText={true} />
 
         <div className="flex items-center gap-1.5">
+          {/* PWA Install / Download App Button */}
+          <PWAInstallButton compact={true} />
+
           {/* Settings Button */}
           {onOpenSettings && (
             <button

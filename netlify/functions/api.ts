@@ -4,7 +4,11 @@ import app, { ensureDataInitialized } from "../../server.ts";
 const serverlessHandler = serverless(app);
 
 export const handler = async (event: any, context: any) => {
-  await ensureDataInitialized();
+  try {
+    await ensureDataInitialized();
+  } catch (err) {
+    console.warn("Netlify function ensureDataInitialized notice:", err);
+  }
 
   // Normalize path if Netlify strips or modifies the /api prefix
   if (event.path && !event.path.startsWith("/api") && !event.path.startsWith("/uploads")) {
@@ -13,3 +17,4 @@ export const handler = async (event: any, context: any) => {
 
   return serverlessHandler(event, context);
 };
+

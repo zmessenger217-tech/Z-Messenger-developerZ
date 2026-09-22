@@ -25,7 +25,11 @@ async function parseResponseJson(resp: Response) {
   } catch (_e) {
     if (!resp.ok) {
       if (resp.status === 502 || resp.status === 503 || resp.status === 504) {
-        throw new Error("Server is initializing. Please wait a few seconds and try again.");
+        throw new Error("Server is waking up. Please wait a few moments and try again.");
+      }
+      const stripped = text ? text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() : "";
+      if (stripped && stripped.length > 0 && stripped.length < 120 && !stripped.toLowerCase().includes("doctype")) {
+        throw new Error(stripped);
       }
       throw new Error(`Server returned an error (${resp.status}). Please try again.`);
     }

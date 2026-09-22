@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/api"
+      "destination": "/api?__route=$1"
     },
     {
       "source": "/api",
@@ -11,7 +11,7 @@
     },
     {
       "source": "/uploads/(.*)",
-      "destination": "/api"
+      "destination": "/api?__route=uploads/$1"
     },
     {
       "source": "/((?!api|uploads|assets|favicon|pwa-|icon|manifest|sw\\.js).*)",

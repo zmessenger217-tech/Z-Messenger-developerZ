@@ -243,6 +243,17 @@ function cleanForFirestore(obj: any): any {
 async function persistUserToFirestore(user: UserRecord, retries = 1) {
   if (!firestoreDb) return;
   try {
+    const rawJson = JSON.stringify(user);
+    const sizeBytes = Buffer.byteLength(rawJson, "utf8");
+    if (sizeBytes > 900000) {
+      console.warn(`User ${user.id} size (${sizeBytes} bytes) exceeds Firestore 1MB limit. Storing compact version.`);
+      const compactUser = {
+        ...user,
+        avatar: user.avatar && user.avatar.length > 500 ? "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150" : user.avatar,
+      };
+      await setDoc(doc(firestoreDb, "users", user.id), cleanForFirestore(compactUser));
+      return;
+    }
     await setDoc(doc(firestoreDb, "users", user.id), cleanForFirestore(user));
   } catch (e: any) {
     if (retries > 0) {
@@ -737,14 +748,20 @@ async function initializeServerData() {
   }
 
   // Ensure uploads directory and sample demo trigger files exist for Z-Assistant AI
-  const uploadsDir = path.join(process.cwd(), "uploads");
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-  }
+  try {
+    const uploadsDir = path.join(process.cwd(), "uploads");
+    if (!fs.existsSync(uploadsDir)) {
+      try {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      } catch (_e) {
+        // Read-only filesystem in serverless environments (Vercel/Lambda)
+      }
+    }
 
-  const sampleGuidePdfPath = path.join(uploadsDir, "Z_Messenger_User_Manual.pdf");
-  if (!fs.existsSync(sampleGuidePdfPath)) {
-    const minimalPdf = `%PDF-1.4
+    if (fs.existsSync(uploadsDir)) {
+      const sampleGuidePdfPath = path.join(uploadsDir, "Z_Messenger_User_Manual.pdf");
+      if (!fs.existsSync(sampleGuidePdfPath)) {
+        const minimalPdf = `%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
@@ -779,13 +796,21 @@ trailer << /Size 6 /Root 1 0 R >>
 startxref
 607
 %%EOF`;
-    fs.writeFileSync(sampleGuidePdfPath, minimalPdf, "utf8");
-  }
+        try {
+          fs.writeFileSync(sampleGuidePdfPath, minimalPdf, "utf8");
+        } catch (_wErr) {}
+      }
 
-  const sampleShortcutsPath = path.join(uploadsDir, "Keyboard_Shortcuts_Reference.png");
-  if (!fs.existsSync(sampleShortcutsPath)) {
-    const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkWPjfDwAEeQHzHlWqFAAAAABJRU5ErkJggg==";
-    fs.writeFileSync(sampleShortcutsPath, Buffer.from(pngBase64, "base64"));
+      const sampleShortcutsPath = path.join(uploadsDir, "Keyboard_Shortcuts_Reference.png");
+      if (!fs.existsSync(sampleShortcutsPath)) {
+        const pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkWPjfDwAEeQHzHlWqFAAAAABJRU5ErkJggg==";
+        try {
+          fs.writeFileSync(sampleShortcutsPath, Buffer.from(pngBase64, "base64"));
+        } catch (_wErr) {}
+      }
+    }
+  } catch (fsErr) {
+    console.warn("Notice: file system initialization note (read-only environment):", fsErr);
   }
 
   // Ensure Z-Assistant AI exists as built-in virtual contact
@@ -893,6 +918,19 @@ function notifyUser(userId: string, event: string, payload: any) {
 
 export const app = express();
 
+// Normalize pre-parsed bodies from serverless runtimes (Vercel / Netlify / AWS Lambda)
+app.use((req, _res, next) => {
+  if (req.body && typeof req.body === "string" && req.body.trim()) {
+    try {
+      req.body = JSON.parse(req.body);
+    } catch (_e) {}
+  }
+  if (req.body !== undefined && req.body !== null && typeof req.body === "object") {
+    (req as any)._body = true;
+  }
+  next();
+});
+
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
@@ -964,8 +1002,12 @@ app.use(async (req, _res, next) => {
 
   // Local static file directory for uploaded chatbot files and attachments
   const uploadsDir = path.join(process.cwd(), "uploads");
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
+  try {
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+  } catch (_e) {
+    // Read-only filesystem in serverless environments (Vercel/Lambda)
   }
   app.use("/uploads", express.static(uploadsDir));
 
@@ -1153,20 +1195,20 @@ app.use(async (req, _res, next) => {
   // Helper to ensure consistent user output with complete botConfig and apiKey
   function createSafeUser(user: UserRecord) {
     const rawBot = user.botConfig;
-    const isSuper = user.role === "superadmin" || user.email.toLowerCase() === "hashir0047@gmail.com";
+    const isSuper = user.role === "superadmin" || (user.email && user.email.toLowerCase() === "hashir0047@gmail.com");
     const accessStatus = user.botAccessStatus || (isSuper ? "approved" : "none");
     const userPhone = user.phoneNumber || rawBot?.phoneNumber || "";
 
     return {
       id: user.id,
-      email: user.email,
-      username: user.username,
-      fullName: user.fullName,
-      avatar: user.avatar,
-      role: user.role,
-      status: user.status,
-      createdAt: user.createdAt,
-      lastSeen: user.lastSeen,
+      email: user.email || "",
+      username: user.username || "",
+      fullName: user.fullName || "User",
+      avatar: user.avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150",
+      role: user.role || "user",
+      status: user.status || "online",
+      createdAt: user.createdAt || Date.now(),
+      lastSeen: user.lastSeen || Date.now(),
       about: user.about || "Available",
       disabled: !!user.disabled,
       blockedUserIds: user.blockedUserIds || [],
@@ -1195,25 +1237,47 @@ app.use(async (req, _res, next) => {
   }
 
   // User Registration
-  app.post("/api/auth/register", (req, res) => {
+  app.post("/api/auth/register", async (req, res) => {
     try {
-      const { email, password, username, fullName, avatar } = req.body;
+      const body = req.body || {};
+      const { email, password, username, fullName, avatar } = body;
 
       if (!email || !password || !username || !fullName) {
         res.status(400).json({ error: "Missing required fields (email, password, username, fullName)" });
         return;
       }
 
-      const cleanEmail = email.trim().toLowerCase();
-      const cleanUsername = username.trim().toLowerCase().replace(/^@/, "");
+      const cleanEmail = String(email).trim().toLowerCase();
+      const cleanUsername = String(username).trim().toLowerCase().replace(/^@/, "");
 
-      if (userByEmail.has(cleanEmail)) {
+      // Check in-memory first
+      let emailExists = userByEmail.has(cleanEmail);
+      let usernameExists = userByUsername.has(cleanUsername);
+
+      // On serverless cold starts, verify against Firestore if not found in memory
+      if ((!emailExists || !usernameExists) && firestoreDb) {
+        try {
+          const usersSnap = await getDocs(collection(firestoreDb, "users"));
+          usersSnap.forEach((d) => {
+            const u = d.data() as UserRecord;
+            if (u && u.id) {
+              users.set(u.id, u);
+              if (u.email) userByEmail.set(u.email.toLowerCase(), u.id);
+              if (u.username) userByUsername.set(u.username.toLowerCase(), u.id);
+            }
+          });
+          emailExists = userByEmail.has(cleanEmail);
+          usernameExists = userByUsername.has(cleanUsername);
+        } catch (_fsErr) {}
+      }
+
+      if (emailExists) {
         res.status(409).json({ error: "An account with this email address already exists. Please log in." });
         return;
       }
 
       // STRICT USERNAME UNIQUENESS CHECK
-      if (userByUsername.has(cleanUsername)) {
+      if (usernameExists) {
         res.status(409).json({ error: "This username is already taken. Please choose a unique username." });
         return;
       }
@@ -1225,7 +1289,7 @@ app.use(async (req, _res, next) => {
         id: userId,
         email: cleanEmail,
         username: cleanUsername,
-        fullName: fullName.trim(),
+        fullName: String(fullName).trim(),
         avatar: avatar || "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150",
         password: password, // In memory secure storage
         role: isSuperadmin ? "superadmin" : "user",
@@ -1239,12 +1303,13 @@ app.use(async (req, _res, next) => {
       userByUsername.set(cleanUsername, userId);
       contactsByUser.set(userId, new Set<string>());
 
-      // Persist to Cloud Firestore
-      persistUserToFirestore(newUser);
+      // Persist to Cloud Firestore and wait to prevent serverless freeze dropped write
+      await persistUserToFirestore(newUser);
 
       res.status(201).json({ success: true, user: createSafeUser(newUser) });
     } catch (err: any) {
-      res.status(500).json({ error: err.message || "Failed to register account" });
+      console.error("Error in /api/auth/register:", err);
+      res.status(500).json({ error: err?.message || "Failed to register account" });
     }
   });
 
@@ -1306,12 +1371,12 @@ app.use(async (req, _res, next) => {
       const userRole = user.role || (user.email === "hashir0047@gmail.com" ? "superadmin" : "user");
       user.role = userRole;
 
-      persistUserToFirestore(user);
+      await persistUserToFirestore(user);
 
       res.json({ success: true, user: createSafeUser(user) });
     } catch (err: any) {
       console.error("Error in /api/auth/login:", err);
-      res.status(500).json({ error: err.message || "Login failed" });
+      res.status(500).json({ error: err?.message || "Login failed" });
     }
   });
 
@@ -4452,7 +4517,7 @@ OUTPUT FORMAT REQUIREMENTS:
   }
 
   // Auto-start server in container / local node environment
-  if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+  if (!process.env.VERCEL && !process.env.VERCEL_ENV && !process.env.AWS_LAMBDA_FUNCTION_NAME && !process.env.NETLIFY) {
     startServer().catch((err) => {
       console.error("Failed to start server:", err);
     });
